@@ -13,34 +13,34 @@ mkdir -p "$PLUGIN_DIR"
 echo "📥 Téléchargement des fichiers..."
 wget -q -O "$PLUGIN_DIR/plugin.py" "$REPO_URL/plugin.py"
 wget -q -O "$PLUGIN_DIR/__init__.py" "$REPO_URL/__init__.py"
+wget -q -O "$PLUGIN_DIR/plugin.png" "$REPO_URL/plugin.png"
 
 # Vérification
 if [ -f "$PLUGIN_DIR/plugin.py" ] && [ -f "$PLUGIN_DIR/__init__.py" ]; then
-    echo "✅ DreamBootManager installé avec succès!"
+    echo "✅ Fichiers principaux installés"
+    
+    # Vérifier l'icône
+    if [ -f "$PLUGIN_DIR/plugin.png" ]; then
+        echo "🖼️ Icône plugin.png installée"
+    else
+        echo "⚠️ Icône non téléchargée"
+    fi
+    
     echo "📍 Emplacement: $PLUGIN_DIR"
     
-    # Redémarrage automatique - Méthodes compatibles Enigma2
+    # Redémarrage automatique
     echo "🔄 Redémarrage d'Enigma2 dans 3 secondes..."
     sleep 3
     
     echo "🔁 Lancement du redémarrage..."
     
-    # Méthode 1: init.d (la plus courante sur Enigma2)
+    # Méthode de redémarrage
     if [ -f "/etc/init.d/enigma2" ]; then
-        echo "📦 Méthode: /etc/init.d/enigma2 restart"
         /etc/init.d/enigma2 restart
-        
-    # Méthode 2: kill et relance
     elif pidof enigma2 > /dev/null; then
-        echo "⚡ Méthode: killall enigma2"
         killall enigma2
         sleep 2
         enigma2 &
-        
-    # Méthode 3: reboot GUI
-    else
-        echo "🖥️ Méthode: wget pour redémarrer GUI"
-        wget -q -O - "http://127.0.0.1/web/restart" > /dev/null 2>&1
     fi
     
 else
