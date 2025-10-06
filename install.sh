@@ -9,4 +9,4 @@ wget -q -O "$PLUGIN_DIR/__init__.py" "$REPO_URL/__init__.py"
 wget -q -O "$PLUGIN_DIR/plugin.png" "$REPO_URL/plugin.png"
 
 sleep 2
-/etc/init.d/enigma2 restart
+init 4 && sleep 1 && init 3
