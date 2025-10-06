@@ -1,0 +1,1 @@
+Dream Boot Manager est un plugin avancé de gestion multiboot pour les récepteurs fonctionnant sous DreamOS (Dreambox et compatibles). Il offre une interface utilisateur intuitive pour gérer facilement plusieurs images système sur un même appareil.
