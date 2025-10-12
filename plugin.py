@@ -14,7 +14,7 @@ from Screens.Screen import Screen
 from Screens.MessageBox import MessageBox
 from Components.Label import Label
 from Components.MenuList import MenuList
-from Components.ActionMap import ActionMap
+from Components.ActionMap import ActionMap, HelpableActionMap
 from Components.ProgressBar import ProgressBar
 from Components.Sources.StaticText import StaticText
 from Tools.Directories import fileExists, pathExists
@@ -45,13 +45,16 @@ class DreamBootManagerScreen(Screen):
         ]
         
         self["menu"] = MenuList(menu_list)
-        self["status"] = Label("▲▼ Navigation   │   OK: Select   │   EXIT: Close")
+        self["status"] = Label("▲▼ Navigation   │   OK: Select   │   INFO: About   │   EXIT: Close")
         
-        self["actions"] = ActionMap(["OkCancelActions", "NavigationActions"], {
+        # Essayer différentes configurations de ActionMap
+        self["actions"] = ActionMap(["SetupActions", "ColorActions", "OkCancelActions", "NavigationActions"], 
+        {
             "ok": self.ok,
             "cancel": self.close,
             "up": self.up,
-            "down": self.down
+            "down": self.down,
+            "info": self.show_info,
         }, -1)
         
     def up(self):
@@ -73,6 +76,12 @@ class DreamBootManagerScreen(Screen):
                 self.backup_recovery_image()
             elif "SD Card Partition" in selection:
                 self.sd_card_partition()
+
+    def show_info(self):
+        """Affiche les informations sur le plugin"""
+        info_text = "Gestionnaire Multiboot Avancé\npour Dreambox ONE & TWO\n\nby ELECTRO YASSINE"
+        
+        self.session.open(MessageBox, info_text, MessageBox.TYPE_INFO, timeout=10)
     
     def multiboot_selector(self):
         """Affiche la liste des images depuis bootconfig.txt"""
@@ -862,7 +871,7 @@ def main(session, **kwargs):
 def Plugins(**kwargs):
     return PluginDescriptor(
         name="Dream Boot Manager",
-        description="Multiboot Manager for DreamOS",
+        description="Multiboot Manager for DreamOS - by ELECTRO YASSINE",
         where=PluginDescriptor.WHERE_PLUGINMENU,
         icon="plugin.png",
         fnc=main
