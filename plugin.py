@@ -1,15 +1,24 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+import glob
 import shutil
+import tarfile
+import hashlib
+import zipfile
+import urllib.request
+import urllib.error
+from datetime import datetime
 from Plugins.Plugin import PluginDescriptor
 from Screens.Screen import Screen
 from Screens.MessageBox import MessageBox
 from Components.Label import Label
 from Components.MenuList import MenuList
 from Components.ActionMap import ActionMap
-from Tools.Directories import fileExists
-from Screens.Standby import TryQuitMainloop
+from Components.ProgressBar import ProgressBar
+from Components.Sources.StaticText import StaticText
+from Tools.Directories import fileExists, pathExists
+from enigma import eTimer
 
 class DreamBootManagerScreen(Screen):
     skin = """
@@ -29,7 +38,7 @@ class DreamBootManagerScreen(Screen):
         
         menu_list = [
             "1. Multiboot Selector",
-            "2. Multiboot Deletion", 
+            "2. Multiboot Deletion",
             "3. Flash Recovery Image",
             "4. Backup Recovery Image",
             "5. SD Card Partition"
@@ -66,6 +75,7 @@ class DreamBootManagerScreen(Screen):
                 self.sd_card_partition()
     
     def multiboot_selector(self):
+        """Affiche la liste des images depuis bootconfig.txt"""
         boot_manager = BootManager()
         images = boot_manager.get_boot_images()
         
@@ -78,6 +88,7 @@ class DreamBootManagerScreen(Screen):
         self.session.openWithCallback(self.on_image_selected, ImageSelectionScreen, images)
     
     def multiboot_deletion(self):
+        """Multiboot deletion functionality"""
         boot_manager = BootManager()
         slots = boot_manager.get_multiboot_slots()
         
@@ -90,11 +101,14 @@ class DreamBootManagerScreen(Screen):
         self.session.openWithCallback(self.on_slot_selected, SlotSelectionScreen, slots, "Delete Slot Image")
     
     def flash_recovery_image(self):
+        """Ouvre le Flash Manager ou Software Manager"""
         try:
+            # Essayer d'importer FlashManager depuis Screens
             from Screens.FlashManager import FlashManager
             self.session.open(FlashManager)
         except ImportError:
             try:
+                # Si échec, ouvrir SoftwareManager
                 from Plugins.SystemPlugins.SoftwareManager.plugin import SoftwareManager
                 self.session.open(SoftwareManager)
             except ImportError:
@@ -103,15 +117,19 @@ class DreamBootManagerScreen(Screen):
                     MessageBox.TYPE_INFO)
     
     def backup_recovery_image(self):
+        """Ouvre l'écran de sauvegarde complète"""
         try:
+            # Essayer d'importer l'écran de sauvegarde depuis Screens
             from Screens.BackupRestore import BackupScreen
             self.session.open(BackupScreen)
         except ImportError:
             try:
+                # Essayer un autre chemin possible
                 from Screens.ImageBackup import ImageBackup
                 self.session.open(ImageBackup)
             except ImportError:
                 try:
+                    # Essayer avec SoftwareManager
                     from Plugins.SystemPlugins.SoftwareManager.BackupRestore import ImageBackup
                     self.session.open(ImageBackup)
                 except ImportError:
@@ -120,6 +138,7 @@ class DreamBootManagerScreen(Screen):
                         MessageBox.TYPE_INFO)
     
     def on_slot_selected(self, selected_slot):
+        """Callback après sélection d'un slot"""
         if selected_slot is None:
             return
             
@@ -135,9 +154,11 @@ class DreamBootManagerScreen(Screen):
             MessageBox, message, MessageBox.TYPE_YESNO)
     
     def return_to_deletion_menu(self, result=None):
+        """Retourne au menu de suppression"""
         self.multiboot_deletion()
     
     def confirm_deletion(self, result, slot_info):
+        """Confirme la suppression d'une image"""
         if result:
             boot_manager = BootManager()
             success, message = boot_manager.delete_slot_image(slot_info)
@@ -153,6 +174,7 @@ class DreamBootManagerScreen(Screen):
             self.return_to_deletion_menu()
     
     def sd_card_partition(self):
+        """SD Card partitioning functionality"""
         message = "This will partition your SD card for multiboot:\n\n" \
                  "• Partition 1: Remaining capacity FAT32 (DREAMCARD)\n" \
                  "• Partition 2: 1.7 GB EXT4 (Slot 5)\n" \
@@ -166,6 +188,7 @@ class DreamBootManagerScreen(Screen):
             MessageBox, message, MessageBox.TYPE_YESNO)
     
     def confirm_sd_partitioning(self, result):
+        """Confirme le partitionnement de la SD card"""
         if result:
             boot_manager = BootManager()
             success, message = boot_manager.partition_sd_card()
@@ -179,10 +202,13 @@ class DreamBootManagerScreen(Screen):
                     MessageBox.TYPE_ERROR)
     
     def auto_restart_gui(self, result=None):
+        """Redémarre automatiquement l'IGU après partitionnement réussi"""
         print("[DreamBootManager] Auto-restarting GUI...")
+        from Screens.Standby import TryQuitMainloop
         self.session.open(TryQuitMainloop, 3)
     
     def on_image_selected(self, selected_image):
+        """Callback après sélection d'une image"""
         if selected_image:
             boot_manager = BootManager()
             if boot_manager.set_boot_image(selected_image):
@@ -195,11 +221,14 @@ class DreamBootManagerScreen(Screen):
                     MessageBox.TYPE_ERROR)
     
     def reboot_confirmation(self, result):
+        """Demande confirmation pour redémarrer"""
         if result:
+            from Screens.Standby import TryQuitMainloop
             self.session.open(TryQuitMainloop, 2)
 
 
 class SlotSelectionScreen(Screen):
+    """Écran de sélection des slots multiboot"""
     skin = """
     <screen position="center,center" size="1000,700" title="Select Slot">
         <widget name="title" position="0,50" size="1000,80" font="Regular;32" halign="center" transparent="1" />
@@ -218,8 +247,10 @@ class SlotSelectionScreen(Screen):
         slot_list = []
         for slot in self.slots:
             if slot['image_exists']:
+                # Afficher le nom réel de l'image depuis /etc/issue
                 display_text = "%s\n✓ %s\nPartition: %s" % (slot['name'], slot['image_name'], slot['partition'])
             else:
+                # Pour les slots vides, afficher simplement "Empty"
                 display_text = "%s\n✗ Empty\nPartition: %s" % (slot['name'], slot['partition'])
             slot_list.append(display_text)
         
@@ -250,6 +281,7 @@ class SlotSelectionScreen(Screen):
 
 
 class ImageSelectionScreen(Screen):
+    """Écran de sélection des images multiboot"""
     skin = """
     <screen position="center,center" size="1000,700" title="Select Boot Image">
         <widget name="title" position="0,50" size="1000,80" font="Regular;32" halign="center" transparent="1" />
@@ -302,6 +334,8 @@ class ImageSelectionScreen(Screen):
 
 
 class BootManager:
+    """Gestionnaire de boot pour lire/écrire bootconfig.txt"""
+    
     def __init__(self):
         self.bootconfig_path = "/data/bootconfig.txt"
         if not fileExists(self.bootconfig_path):
@@ -310,11 +344,13 @@ class BootManager:
         self.create_all_startup_files()
     
     def ensure_bootconfig(self):
+        """S'assure que bootconfig.txt existe avec la configuration U-Boot correcte"""
         if not fileExists(self.bootconfig_path):
             print("[BootManager] Creating bootconfig.txt with U-Boot configuration...")
             self.create_default_bootconfig()
     
     def create_default_bootconfig(self):
+        """Crée le fichier bootconfig.txt par défaut avec la configuration U-Boot mise à jour"""
         bootconfig_content = """default=0
 details=0
 timeout=10
@@ -323,40 +359,39 @@ fb_size=1080,300
 
 [Dreambox Image]
 cmd=ext4load mmc 1:5 1080000 /boot/kernel.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk0p5 rootfstype=ext4 kernel=/boot/kernel.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [Dreambox Image 1]
 cmd=ext4load mmc 1:6 1080000 /boot/kernel.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk0p6 rootfstype=ext4 kernel=/boot/kernel.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [Dreambox Image 2]
 cmd=ext4load mmc 1:7 1080000 /boot/kernel.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk0p7 rootfstype=ext4 kernel=/boot/kernel.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [Dreambox Image 3]
 cmd=ext4load mmc 1:8 1080000 /boot/kernel.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk0p8 rootfstype=ext4 kernel=/boot/kernel.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [SDcard Slot 5]
 cmd=fatload mmc 0:1 1080000 /kernel2.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk1p2 rootfstype=ext4 kernel=/kernel2.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [SDcard Slot 6]
 cmd=fatload mmc 0:1 1080000 /kernel3.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk1p3 rootfstype=ext4 kernel=/kernel3.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [SDcard Slot 7]
 cmd=fatload mmc 0:1 1080000 /kernel4.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk1p4 rootfstype=ext4 kernel=/kernel4.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 
 [SDcard Slot 8]
 cmd=fatload mmc 0:1 1080000 /kernel5.img;bootm;
-arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
+arg=${bootargs} root=/dev/mmcblk1p5 rootfstype=ext4 kernel=/kernel5.img logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p50hz fb_width=1280 fb_height=720 panel_type=lcd_4
 """
         try:
             with open(self.bootconfig_path, 'w') as f:
                 f.write(bootconfig_content)
-            os.chmod(self.bootconfig_path, 0o755)
             print("[BootManager] ✓ Default bootconfig.txt created successfully")
             return True
         except Exception as e:
@@ -364,6 +399,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return False
     
     def create_all_startup_files(self):
+        """Crée tous les fichiers STARTUP pour les slots MMC et SD Card"""
         try:
             mmc_startup_contents = {
                 'STARTUP_1': 'root=/dev/mmcblk0p5 rootfstype=ext4 kernel=/boot/kernel.img\n',
@@ -399,6 +435,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return False
     
     def get_multiboot_slots(self):
+        """Récupère la liste des slots multiboot avec nom d'image"""
         slots = []
         
         internal_slots = [
@@ -432,6 +469,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
         return slots
     
     def get_sd_card_size(self):
+        """Récupère la taille totale de la SD card en Mo"""
         try:
             cmd = "fdisk -l /dev/mmcblk1 | grep 'Disk /dev/mmcblk1' | awk '{print $3}'"
             size_gb = float(os.popen(cmd).read().strip())
@@ -441,6 +479,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return 8192
     
     def partition_sd_card(self):
+        """Partitionne la SD card avec les partitions spécifiées"""
         try:
             print("[BootManager] Starting SD card partitioning...")
             
@@ -521,6 +560,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return False, "Error during SD card partitioning: %s" % str(e)
     
     def ensure_bootconfig_updated(self):
+        """S'assure que bootconfig.txt contient la configuration U-Boot correcte"""
         try:
             if fileExists(self.bootconfig_path):
                 with open(self.bootconfig_path, 'r') as f:
@@ -554,9 +594,11 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return self.create_default_bootconfig()
     
     def check_partition_exists(self, partition):
+        """Vérifie si la partition existe"""
         return fileExists(partition) or os.path.exists(partition)
     
     def check_slot_has_image(self, slot):
+        """Vérifie si une image est installée dans le slot et retourne son nom depuis /etc/issue"""
         try:
             if not os.path.exists(slot['mount_point']):
                 os.makedirs(slot['mount_point'], exist_ok=True)
@@ -571,11 +613,13 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             image_name = "Empty"
             
             try:
+                # Vérifier si la partition contient des fichiers (autre que lost+found)
                 items = os.listdir(slot['mount_point'])
                 valid_items = [item for item in items if item not in ['.', '..', 'lost+found']]
                 image_exists = len(valid_items) > 0
                 
                 if image_exists:
+                    # Lire /etc/issue pour obtenir le nom de l'image
                     issue_file = os.path.join(slot['mount_point'], 'etc', 'issue')
                     if os.path.exists(issue_file):
                         try:
@@ -584,12 +628,14 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
                             lines = content.split('\n')
                             if lines:
                                 image_name = lines[0].strip()
+                                # Nettoyer le nom
                                 image_name = image_name.replace('Welcome to', '').replace('\\n', '').replace('\\l', '').strip()
                                 if not image_name:
                                     image_name = "Unknown Image"
                         except:
                             image_name = "Unknown Image"
                     else:
+                        # Si pas de /etc/issue, vérifier la présence de fichiers système
                         system_dirs = ['bin', 'sbin', 'usr', 'etc', 'lib']
                         has_system = any(os.path.exists(os.path.join(slot['mount_point'], d)) for d in system_dirs)
                         image_name = "Unknown System" if has_system else "Empty"
@@ -606,6 +652,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return False, "Empty"
     
     def force_unmount(self, mount_point):
+        """Force le démontage d'un point de montage"""
         try:
             if os.path.ismount(mount_point):
                 umount_cmd = "umount %s 2>/dev/null" % mount_point
@@ -620,10 +667,12 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             pass
     
     def delete_slot_image(self, slot_info):
+        """Nettoie et supprime l'image installée dans un slot sans supprimer la partition"""
         try:
             print("[BootManager] Deleting image from slot:", slot_info['name'])
             print("[BootManager] Partition:", slot_info['partition'])
             
+            # Monter la partition
             if not os.path.exists(slot_info['mount_point']):
                 os.makedirs(slot_info['mount_point'], exist_ok=True)
             
@@ -632,6 +681,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
                 return False, "Impossible de monter la partition"
             
             try:
+                # Nettoyer complètement la partition (supprimer tous les fichiers et dossiers)
                 for item in os.listdir(slot_info['mount_point']):
                     if item != 'lost+found':
                         item_path = os.path.join(slot_info['mount_point'], item)
@@ -643,8 +693,10 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
                         except Exception as e:
                             print(f"Warning: Cannot remove {item_path}: {e}")
                 
+                # Synchroniser
                 os.system("sync")
                 
+                # Reformater la partition pour s'assurer qu'elle est complètement vide
                 print("[BootManager] Reformatting partition to ensure clean state...")
                 mkfs_cmd = f"mkfs.ext4 -F {slot_info['partition']} 2>/dev/null"
                 reformat_result = os.system(mkfs_cmd)
@@ -657,6 +709,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
                 return True, "Image supprimée avec succès, slot maintenant vide"
                 
             finally:
+                # Toujours démonter
                 self.force_unmount(slot_info['mount_point'])
             
         except Exception as e:
@@ -665,6 +718,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return False, error_msg
     
     def get_boot_images(self):
+        """Extrait les images disponibles depuis bootconfig.txt"""
         images = []
         
         self.ensure_bootconfig()
@@ -697,6 +751,7 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
         return images
     
     def get_current_boot(self):
+        """Détermine l'image de boot actuelle via le fichier STARTUP ou bootconfig"""
         try:
             startup_files = [
                 "/boot/STARTUP",
@@ -738,35 +793,76 @@ arg=${bootargs} logo=osd0,loaded,0x7f800000 vout=1080p50hz,enable hdmimode=1080p
             return "Unknown"
     
     def set_boot_image(self, image_info):
+        """Définit l'image de boot par défaut en modifiant bootconfig.txt et STARTUP"""
         try:
-            if not fileExists(self.bootconfig_path):
-                print("[BootManager] Bootconfig not found:", self.bootconfig_path)
-                return False
+            print("[BootManager] Setting boot image:", image_info['name'])
+            print("[BootManager] Command:", image_info['cmd'])
             
-            with open(self.bootconfig_path, 'r') as f:
-                content = f.read()
+            success = self.set_boot_via_bootconfig(image_info)
+            startup_success = self.set_boot_via_startup(image_info)
             
-            new_content = re.sub(r'default=\d+', 'default=%d' % image_info['index'], content)
-            
-            with open(self.bootconfig_path, 'w') as f:
-                f.write(new_content)
-            
-            print("[BootManager] ✓ Boot image set to:", image_info['name'])
-            return True
-            
+            return success or startup_success
+                
         except Exception as e:
             print("[BootManager] Error setting boot image:", str(e))
-            return False
+        
+        return False
+    
+    def set_boot_via_bootconfig(self, image_info):
+        """Définit l'image de boot via bootconfig.txt"""
+        try:
+            if fileExists(self.bootconfig_path):
+                with open(self.bootconfig_path, 'r') as f:
+                    content = f.read()
+                
+                new_content = re.sub(r'default=\d+', 'default=%d' % image_info['index'], content)
+                
+                if 'default=' not in new_content:
+                    new_content = 'default=%d\n%s' % (image_info['index'], new_content)
+                
+                with open(self.bootconfig_path, 'w') as f:
+                    f.write(new_content)
+                
+                print("[BootManager] ✓ Bootconfig updated with default=%d" % image_info['index'])
+                return True
+        except Exception as e:
+            print("[BootManager] Error updating bootconfig:", str(e))
+        
+        return False
+    
+    def set_boot_via_startup(self, image_info):
+        """Définit l'image de boot via le fichier STARTUP"""
+        try:
+            uboot_cmd = "%s %s" % (image_info['cmd'], image_info['arg'])
+            
+            startup_files = [
+                "/boot/STARTUP",
+                "/data/STARTUP",
+                "/tmp/STARTUP"
+            ]
+            
+            for startup_file in startup_files:
+                try:
+                    with open(startup_file, 'w') as f:
+                        f.write(uboot_cmd)
+                    print("[BootManager] ✓ %s updated" % startup_file)
+                    return True
+                except:
+                    continue
+        except Exception as e:
+            print("[BootManager] Error updating STARTUP files:", str(e))
+        
+        return False
 
 
 def main(session, **kwargs):
-    return session.open(DreamBootManagerScreen)
+    session.open(DreamBootManagerScreen)
 
 
 def Plugins(**kwargs):
     return PluginDescriptor(
         name="Dream Boot Manager",
-        description="Multiboot Manager for DreamOS Images",
+        description="Multiboot Manager for DreamOS",
         where=PluginDescriptor.WHERE_PLUGINMENU,
         icon="plugin.png",
         fnc=main
